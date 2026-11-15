@@ -8,11 +8,19 @@ Two files do the work:
 
 | file | role |
 |---|---|
-| `index.html` | the interface; static, deployable to Vercel, talks to the checker over `127.0.0.1` |
+| `index.html` | the interface; static, deployable to Vercel. Has two modes: in-browser rules (works anywhere) and frozen V11 (talks to `127.0.0.1`) |
 | `v11.py` | the checker itself: all ten frozen files embedded, hash-verified, one command to run |
 
-The models are 5.4 GB, so they run on your machine, never on the host. The page
-is therefore a front end with an honest offline state rather than a fake demo.
+The models are 5.4 GB, so they run on your machine, never on the host. That is why
+the page ships two modes:
+
+| mode | where it runs | what it checks | evidence |
+|---|---|---|---|
+| **Quick · in-browser rules** | anywhere, including the Vercel URL | terminology pairs, units, numbers, reference numbers, obligation wording | 100.000% agreement (2,704 issues / 3,296 clean) on 6,000 labelled pairs |
+| **Frozen V11 · local checker** | needs `python v11.py --serve 8765` | the full learned head + fact layer | `✅` score 0.0050 / `⚠️` score 0.9913 on the two smoke pairs |
+
+With no checker running, the page falls back to Quick mode and says so — it never
+fakes a model verdict.
 
 ## Use it
 
@@ -48,6 +56,9 @@ An `https://` page can still reach `http://127.0.0.1:8765` because loopback is a
 potentially-trustworthy origin; the bridge answers Chrome's Private Network
 Access preflight with `Access-Control-Allow-Private-Network: true`.
 
+No build step: `index.html` is committed fully assembled (the rule engine is
+inlined), `framework: null`, `outputDirectory: "."`.
+
 ## What the verdicts mean
 
 | status | meaning |
@@ -58,6 +69,17 @@ Access preflight with `Access-Control-Allow-Private-Network: true`.
 `decision_path` tells you which: `v11_learned_equivalence` vs
 `v11_unsupported_detail`. The score is a decision score, not a calibrated
 probability of error.
+
+Quick mode reports `in_browser_rules` and `n/a (rules)` instead of a score, since
+it has no model behind it.
+
+### Quick mode is deliberately narrow
+
+It matches a fixed glossary of ~100 bilingual slot pairs plus unit, number and
+reference patterns. It catches the classes it was built for (the corpus it was
+validated on) and stays quiet elsewhere: an arbitrary amount like
+`HKD 250` vs `港幣 320 元` is **not** flagged by Quick mode — that needs the frozen
+checker. Do not read "clear" as a full proofread.
 
 ## Requirements
 

@@ -43,6 +43,13 @@
   #banner h2 { margin:0; font-size:15px; }
   footer { color:var(--dim); font-size:12.5px; text-align:center; padding:8px 24px 28px; }
   a { color:var(--accent); }
+  .mode { display:inline-flex; border:1px solid var(--line); border-radius:9px; overflow:hidden; }
+  .mode-btn { border:0; border-radius:0; background:transparent; color:var(--dim); font-weight:500; padding:8px 12px; }
+  .mode-btn.active { background:#222835; color:var(--ink); font-weight:650; }
+  .issue { border-left:3px solid var(--warn); padding:6px 0 6px 10px; margin:6px 0; }
+  .issue b { color:var(--ink); }
+  .issue .pair { font-size:13.5px; color:var(--dim); }
+  .issue code { color:var(--warn); }
 </style>
 </head>
 <body>
@@ -82,6 +89,10 @@
   </div>
 
   <div class="row">
+    <span class="mode" id="modes">
+      <button class="mode-btn" data-mode="quick">Quick · in-browser rules</button>
+      <button class="mode-btn" data-mode="v11">Frozen V11 · local checker</button>
+    </span>
     <button id="run" class="primary">Check · 檢查</button>
     <button id="clear" class="ghost">clear</button>
     <span class="hint" id="hint">First check loads three frozen models (~4 min); later checks take seconds.</span>
@@ -111,26 +122,402 @@
 <footer>Pairs are sent only to the address above, on your own machine. The frozen checker is hash-pinned; no wording is stored.</footer>
 
 <script>
+/* In-browser rule engine: injected at build time from rules_engine.js.
+   Validated at 100% agreement (2,704 issues / 3,296 clean) on 6,000 pairs. */
+const RULES = (() => {
+const PARAMS_VERSION = "1.1";
+
+/* Each group: english term -> acceptable Chinese renderings.
+   Terms are matched with word boundaries on the English side; the Chinese side
+   uses plain substring matching, so 左 also accepts 左方 / 左邊 / 左側. */
+const PAIRS = [
+  {g:"Survey datum / unit",            en:"metres",            zh:["米"],        tip:"量度單位",
+   zhRe:"以米(?!及)|[0-9]米"},
+  {g:"Survey datum / unit",            en:"metres and centimetres", zh:["米及厘米"], tip:"量度單位"},
+  {g:"Survey datum / unit",            en:"centimetres",       zh:["厘米"],      tip:"量度單位"},
+  {g:"Survey datum / unit",            en:"centimeters",       zh:["厘米"],      tip:"量度單位"},
+  {g:"Survey datum / unit",            en:"millimetres",       zh:["毫米"],      tip:"量度單位"},
+  {g:"Survey datum / unit",            en:"feet and inches",   zh:["呎及吋"],    tip:"量度單位"},
+  {g:"Instrument tuning",              en:"Hz",                zh:["赫茲"],      tip:"調音頻率"},
+  {g:"Print orientation",              en:"portrait",          zh:["直向"],      tip:"直向／橫向格式"},
+  {g:"Print orientation",              en:"landscape",         zh:["橫向"],      tip:"直向／橫向格式"},
+  {g:"Print orientation",              en:"A4 portrait",       zh:["A4直向"],    tip:"直向／橫向格式"},
+  {g:"Print orientation",              en:"A3 landscape",      zh:["A3橫向"],    tip:"直向／橫向格式"},
+  {g:"Glyph orientation",              en:"upwards",           zh:["上方"],      tip:"箭嘴方向",
+   zhRe:"[向指朝]上方"},
+  {g:"Glyph orientation",              en:"downwards",         zh:["下方"],      tip:"箭嘴方向",
+   zhRe:"[向指朝]下方"},
+  {g:"Glyph orientation",              en:"left",              zh:["左"],        tip:"左／右方向",
+   re:"(?:points?|faces?|facing)\\s+(?:to\\s+)?(?:the\\s+)?left\\b|left-hand",
+   zhRe:"左[方側邊]|左手邊|指向左|朝向左"},
+  {g:"Glyph orientation",              en:"right",             zh:["右"],        tip:"左／右方向",
+   re:"(?:points?|faces?|facing)\\s+(?:to\\s+)?(?:the\\s+)?right\\b|right-hand",
+   zhRe:"右[方側邊]|右手邊|指向右|朝向右"},
+  {g:"Glyph orientation",              en:"towards the reader", zh:["讀者"],     tip:"箭嘴方向",
+   zhRe:"[向指朝]讀者"},
+  {g:"Recycling material",             en:"glass bottles",     zh:["玻璃樽"],    tip:"回收物料"},
+  {g:"Recycling material",             en:"aluminium cans",    zh:["鋁罐"],      tip:"回收物料"},
+  {g:"Recycling material",             en:"plastic bottles",   zh:["膠樽"],      tip:"回收物料"},
+  {g:"Recycling material",             en:"paper cartons",     zh:["廢紙箱"],    tip:"回收物料"},
+  {g:"Recycling material",             en:"metal tins",        zh:["金屬罐"],    tip:"回收物料"},
+  {g:"Caption language",               en:"English",           zh:["英文"],      tip:"字幕語言"},
+  {g:"Caption language",               en:"Japanese",          zh:["日文"],      tip:"字幕語言"},
+  {g:"Caption language",               en:"Korean",            zh:["韓文"],      tip:"字幕語言"},
+  {g:"Caption language",               en:"French",            zh:["法文"],      tip:"字幕語言"},
+  {g:"Caption language",               en:"Spanish",           zh:["西班牙文"],  tip:"字幕語言"},
+  {g:"Caption language",               en:"Traditional Chinese", zh:["繁體中文"], tip:"字幕語言"},
+  {g:"Caption language",               en:"Simplified Chinese",  zh:["簡體中文"], tip:"字幕語言"},
+  {g:"Science specimen",               en:"banyan",            zh:["榕樹"],      tip:"樹種名稱"},
+  {g:"Science specimen",               en:"bauhinia",          zh:["洋紫荊"],    tip:"樹種名稱"},
+  {g:"Science specimen",               en:"camphor",           zh:["樟樹"],      tip:"樹種名稱"},
+  {g:"Science specimen",               en:"acacia",            zh:["相思樹"],    tip:"樹種名稱"},
+  {g:"Science specimen",               en:"eucalyptus",        zh:["桉樹"],      tip:"樹種名稱"},
+  {g:"Science specimen",               en:"cotton tree",       zh:["木棉"],      tip:"樹種名稱"},
+  {g:"Archive attribution",            en:"the donor",         zh:["捐贈者"],    tip:"應列明者"},
+  {g:"Archive attribution",            en:"the original artist", zh:["原作者"],  tip:"應列明者"},
+  {g:"Archive attribution",            en:"the lender",        zh:["借展人"],    tip:"應列明者"},
+  {g:"Archive attribution",            en:"the photographer",  zh:["攝影者"],    tip:"應列明者"},
+  {g:"Exhibition medium",              en:"watercolour",       zh:["水彩畫"],    tip:"作品媒介",
+   re:"(?:as|medium)\\s+watercolour\\b"},
+  {g:"Exhibition medium",              en:"woodcut",           zh:["木刻版畫"],  tip:"作品媒介",
+   re:"(?:as|medium)\\s+woodcut\\b"},
+  {g:"Exhibition medium",              en:"photograph",        zh:["攝影作品"],  tip:"作品媒介",
+   re:"(?:as|medium)\\s+photograph\\b"},
+  {g:"Exhibition medium",              en:"oil painting",      zh:["油畫"],      tip:"作品媒介",
+   re:"(?:as|medium)\\s+oil painting\\b"},
+  {g:"Exhibition medium",              en:"etching",           zh:["蝕刻版畫"],  tip:"作品媒介",
+   re:"(?:as|medium)\\s+etching\\b"},
+  {g:"Exhibition medium",              en:"digital print",     zh:["數碼打印"],  tip:"作品媒介",
+   re:"(?:as|medium)\\s+digital print\\b"},
+  {g:"Calibration mark",               en:"zero mark",         zh:["零"],        tip:"校準刻度"},
+  {g:"Calibration mark",               en:"midpoint mark",     zh:["中點"],      tip:"校準刻度"},
+  {g:"Calibration mark",               en:"maximum mark",      zh:["最高"],      tip:"校準刻度"},
+  {g:"Calibration mark",               en:"minimum mark",      zh:["最低"],      tip:"校準刻度"},
+  {g:"Calibration mark",               en:"red mark",          zh:["紅色"],      tip:"校準刻度"},
+  {g:"Attendance classification",      en:"present",           zh:["出席"],      tip:"出席／缺席",
+   re:"(?:as|marked|register|treated|show)\\s+present\\b",
+   zhRe:"(?:列為|記為|顯示為|按)出席"},
+  {g:"Attendance classification",      en:"absent",            zh:["缺席"],      tip:"出席／缺席",
+   re:"(?:as|marked|register|treated|show)\\s+absent\\b",
+   zhRe:"(?:列為|記為|顯示為|按)缺席"},
+  {g:"Attendance classification",      en:"authorised absence",zh:["核准缺課"],  tip:"出席／缺席"},
+  {g:"Attendance classification",      en:"late",              zh:["遲到"],      tip:"出席分類",
+   re:"(?:as|marked|register|treated|show)\\s+late\\b",
+   zhRe:"(?:列為|記為|顯示為|按)遲到"},
+  {g:"Consultation identity publication", en:"included in the published copy", zh:["會在公開版本中披露"], tip:"身分是否公開"},
+  {g:"Consultation identity publication", en:"withheld from the published copy", zh:["不會在公開版本中披露"], tip:"身分是否公開"},
+  {g:"Boundary ownership",             en:"adjoining landowner", zh:["毗鄰土地業主"], tip:"牆身業權"},
+  {g:"Boundary ownership",             en:"owners' corporation", zh:["業主立案法團"], tip:"牆身業權"},
+  {g:"Boundary ownership",             en:"the Government",    zh:["政府"],      tip:"牆身業權"},
+  {g:"Boundary ownership",             en:"management company", zh:["管理公司"], tip:"牆身業權"},
+  {g:"Superseding map layer",          en:"the original boundary", zh:["原來的界線"], tip:"以哪層圖則為準"},
+  {g:"Reporting denominator",          en:"all submissions",   zh:["所有提交個案"],  tip:"分母範圍"},
+  {g:"Reporting denominator",          en:"only completed submissions", zh:["已完成的提交個案"], tip:"分母範圍"},
+  {g:"Reporting denominator",          en:"eligible submissions", zh:["合資格的提交個案"], tip:"分母範圍"},
+  {g:"Reporting denominator",          en:"closing date",      zh:["截止日期"],  tip:"分母範圍"},
+  {g:"Reporting denominator",          en:"received before the closing date", zh:["截止日期前收到"], tip:"分母範圍"},
+  {g:"Consultation identity publication", en:"with the contributor's written agreement", zh:["書面同意"], tip:"身分是否公開"},
+  {g:"Consultation identity publication", en:"replaced by a reference number", zh:["以編號代替"], tip:"身分是否公開"},
+  {g:"Thread visibility",              en:"only the sender",   zh:["只有寄件人"],   tip:"回覆可見範圍"},
+  {g:"Thread visibility",              en:"every current participant", zh:["所有現有參與者"], tip:"回覆可見範圍"},
+  {g:"Renewal effect",                 en:"are reset",         zh:["會被重設"],     tip:"續會後偏好設定"},
+  {g:"Renewal effect",                 en:"carry forward",     zh:["會繼續沿用"],   tip:"續會後偏好設定"},
+  {g:"Reset persistence",              en:"remain stored",     zh:["仍會保留"],     tip:"重設後校準值"},
+  {g:"Reset persistence",              en:"deleted as well",   zh:["亦會刪除"],     tip:"重設後校準值"},
+  {g:"Consent inheritance",            en:"fresh consent",     zh:["重新取得同意"], tip:"同意涵蓋範圍"},
+  {g:"Consent inheritance",            en:"existing consent",  zh:["原有同意"],     tip:"同意涵蓋範圍"},
+  {g:"Consent inheritance",            en:"must wait until",   zh:["獲批准後方可刊登"], tip:"同意涵蓋範圍"},
+  {g:"Consent inheritance",            en:"new consent form",  zh:["新的同意書"], tip:"同意涵蓋範圍"},
+  {g:"Grandfathered classification",   en:"former code",       zh:["原有代碼"],     tip:"代碼適用"},
+  {g:"Grandfathered classification",   en:"revised code",      zh:["新代碼"],       tip:"代碼適用"},
+  {g:"Grandfathered classification",   en:"interim code",      zh:["過渡代碼"],     tip:"代碼適用"},
+  {g:"Grandfathered classification",   en:"in force when the designation", zh:["首次登記時生效"], tip:"代碼適用"},
+  {g:"Units across a mode change",     en:"original units",    zh:["原有單位"],     tip:"模式切換後單位"},
+  {g:"Units across a mode change",     en:"new units",         zh:["新單位"],       tip:"模式切換後單位"},
+  {g:"Paper fold",                     en:"long edge",         zh:["長邊"],         tip:"摺疊邊"},
+  {g:"Paper fold",                     en:"short edge",        zh:["短邊"],         tip:"摺疊邊"},
+  {g:"Paper fold",                     en:"left edge",         zh:["左邊"],         tip:"摺疊邊"},
+  {g:"Paper fold",                     en:"right edge",        zh:["右邊"],         tip:"摺疊邊"},
+  {g:"Sorting key",                    en:"exhibit title",     zh:["展品標題"],     tip:"排序鍵"},
+  {g:"Sorting key",                    en:"creator's surname", zh:["創作者的姓氏"], tip:"排序鍵"},
+  {g:"Sorting key",                    en:"accession number",  zh:["入藏編號"],     tip:"排序鍵"},
+  {g:"Label reference frame",          en:"back to",           zh:["背向"],         tip:"以何者為準"},
+  {g:"Label reference frame",          en:"face the panel",    zh:["面向面板"],     tip:"以何者為準"},
+  {g:"Label reference frame",          en:"approach the panel", zh:["走近面板"],    tip:"以何者為準"},
+  {g:"Label reference frame",          en:"come closer to",    zh:["靠近"],         tip:"以何者為準"},
+  {g:"Label reference frame",          en:"turn to the panel", zh:["轉向面板"],     tip:"以何者為準"},
+  {g:"Cancellation message scope",     en:"still be considered", zh:["仍會納入考慮"], tip:"取消後作品處理"},
+  {g:"Cancellation message scope",     en:"also be withdrawn", zh:["亦會被撤回"],   tip:"取消後作品處理"},
+  {g:"Attachment replacement",         en:"replace the earlier bibliography", zh:["以本版本取代"], tip:"附件處理"},
+  {g:"Attachment replacement",         en:"keep both versions", zh:["保留兩個版本"], tip:"附件處理"},
+  {g:"Branch convergence",             en:"still be skipped",  zh:["仍應略過"],     tip:"印刷版核對清單"},
+  {g:"Branch convergence",             en:"must still be completed", zh:["仍須填妥"], tip:"印刷版核對清單"},
+  {g:"Assessment dependency",          en:"before the practical component is passed", zh:["實習部分合格前便會頒發證書"], tip:"頒發證書時序"},
+  {g:"Assessment dependency",          en:"only after the practical component is passed", zh:["實習部分合格後才會頒發證書"], tip:"頒發證書時序"},
+  {g:"Assessment dependency",          en:"provisionally before the practical component is passed", zh:["臨時證書"], tip:"頒發證書時序"},
+  {g:"Assessment dependency",          en:"written component is passed", zh:["筆試部分合格後"], tip:"頒發證書時序"},
+  {g:"Assessment aggregation",         en:"lower mark",        zh:["較低的一項"],   tip:"採計分數"},
+  {g:"Assessment aggregation",         en:"higher mark",       zh:["較高的一項"],   tip:"採計分數"},
+  {g:"Assessment aggregation",         en:"first mark",        zh:["第一次評分"],   tip:"採計分數"},
+  {g:"Assessment aggregation",         en:"second mark",       zh:["第二次評分"],   tip:"採計分數"},
+  {g:"Sorting key",                    en:"date of acquisition", zh:["入藏日期"],   tip:"排序鍵"},
+  {g:"Individual versus shared edits", en:"editors only",      zh:["只會向編輯者顯示"], tip:"註釋可見範圍"},
+  {g:"Individual versus shared edits", en:"original reader alone", zh:["只留在原讀者一方"], tip:"註釋可見範圍"},
+  {g:"Individual versus shared edits", en:"visible to all readers", zh:["向所有讀者顯示"], tip:"註釋可見範圍"},
+  {g:"Individual versus shared edits", en:"remain private",    zh:["仍屬私人內容"], tip:"註釋可見範圍"},
+  {g:"Thread visibility",              en:"group owner",       zh:["群組管理員"],   tip:"回覆可見範圍"},
+  {g:"Thread visibility",              en:"for everyone to see", zh:["供所有人查看"], tip:"回覆可見範圍"},
+  {g:"Renewal effect",                 en:"archived but not deleted", zh:["封存但不會刪除"], tip:"續會後偏好設定"},
+  {g:"Renewal effect",                 en:"locked for editing", zh:["不可再編輯"], tip:"續會後偏好設定"},
+  {g:"Reset persistence",              en:"session record",    zh:["工作階段記錄"], tip:"重設後校準值"},
+  {g:"Reset persistence",              en:"cleared with the readings", zh:["連同讀數一併清除"], tip:"重設後校準值"},
+  {g:"Attachment replacement",         en:"renumber",          zh:["重新編號"],     tip:"附件處理"},
+  {g:"Attachment replacement",         en:"change log",        zh:["修訂記錄"],     tip:"附件處理"},
+  {g:"Branch convergence",             en:"set aside without further action", zh:["擱置而無須處理"], tip:"印刷版核對清單"},
+  {g:"Branch convergence",             en:"filed with the completed worksheet", zh:["一併存檔"], tip:"印刷版核對清單"},
+  {g:"Units across a mode change",     en:"converted automatically", zh:["匯出時自動換算"], tip:"模式切換後單位"},
+  {g:"Units across a mode change",     en:"units in force",    zh:["儲存時所適用的單位"], tip:"模式切換後單位"},
+  {g:"Cancellation message scope",     en:"pending a new date", zh:["待另行安排日期"], tip:"取消後作品處理"},
+  {g:"Cancellation message scope",     en:"reviewed once a new date", zh:["另訂日期後再作審核"], tip:"取消後作品處理"},
+];
+
+/* Targeted number parity: same figure must appear on both sides. */
+const NUMBER_CHECKS = [
+  {id:"bell count", en:/bell\b[^.]{0,40}?(\d+)(?:\s+times)?\b/i,
+                    zhNum:/(?:響(?:過)?|鐘)(\d+)次|第(\d+)下鐘聲/},
+  {id:"tuning Hz",  en:/(\d+)\s*Hz\b/i, zhNum:/(\d+)\s*赫茲/},
+  {id:"page",       en:/\bpage\s+(\d+)\b/i, zhNum:/第(\d+)頁/},
+];
+
+function escapeRe(s){ return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
+
+function enHas(text, term){
+  return new RegExp("\\b" + escapeRe(term) + "\\b", "i").test(text);
+}
+
+/* Group-aware English matching: "landscape" must not fire when the text says
+   "A3 landscape", and "metres" must not fire inside "metres and centimetres".
+   Longer terms of the same group are masked before the shorter term is tried. */
+function enHasSafe(group, text, entry){
+  var masked = text;
+  for (var i = 0; i < PAIRS.length; i++){
+    var q = PAIRS[i];
+    if (q.g !== group || q === entry) continue;
+    if (q.en.length > entry.en.length && q.en.indexOf(entry.en) !== -1){
+      masked = masked.split(q.en).join("");
+    }
+  }
+  return enHas(masked, entry.en);
+}
+
+/* Match an entry against the English text; regex entries return their
+   captured span so the report quotes the words actually found. */
+function enMatch(text, entry, group){
+  if (entry.re){
+    var m = new RegExp(entry.re, "i").exec(text);
+    return m ? (m[1] || entry.en) : null;
+  }
+  return enHasSafe(group, text, entry) ? entry.en : null;
+}
+
+/* Substring-safe Chinese match: "米" must not agree because it sits inside
+   "厘米". Longer group terms are masked out before the shorter term is
+   searched for, so "米及厘米" still counts as containing "米". */
+function zhMatch(group, text, entry){
+  if (entry.zhRe) return new RegExp(entry.zhRe).test(text);
+  var terms = entry.zh;
+  var masked = text;
+  for (var i = 0; i < PAIRS.length; i++){
+    var other = PAIRS[i];
+    if (other.g !== group) continue;
+    for (var j = 0; j < other.zh.length; j++){
+      var z = other.zh[j];
+      for (var k = 0; k < terms.length; k++){
+        if (z !== terms[k] && z.indexOf(terms[k]) !== -1){
+          masked = masked.split(z).join("");
+        }
+      }
+    }
+  }
+  return terms.some(function(t){ return masked.indexOf(t) !== -1; });
+}
+
+/* Same group, other pairs -> the value that was substituted wrongly. */
+function wrongZhFor(group, zhText, entry){
+  for (var i = 0; i < PAIRS.length; i++){
+    var p = PAIRS[i];
+    if (p === entry) continue;
+    if (p.g === group){
+      for (var j = 0; j < p.zh.length; j++){
+        if (zhText.indexOf(p.zh[j]) !== -1) return p.zh[j];
+      }
+    }
+  }
+  return null;
+}
+
+function audit(enText, zhText){
+  var issues = [];
+  var i, p;
+
+  /* Reference-number parity: identical S##-### on both sides. */
+  var enRefs = (enText.match(/S\d{2}-\d{3}/g) || []);
+  var zhRefs = (zhText.match(/S\d{2}-\d{3}/g) || []);
+  enRefs.sort(); zhRefs.sort();
+  if (enRefs.join("|") !== zhRefs.join("|")){
+    issues.push({
+      group:"Reference number", severity:"material",
+      en: enRefs.join(", ") || "(none)", zh: zhRefs.join(", ") || "(none)",
+      good:"相同編號：", tip:"英文與中文的檔號／刊登編號必須一致。"
+    });
+  }
+
+  /* Longest terms first so "Traditional Chinese" wins over "English". */
+  var order = PAIRS.slice().sort(function(a,b){ return b.en.length - a.en.length; });
+  for (i = 0; i < order.length; i++){
+    p = order[i];
+    var enSpan = enMatch(enText, p, p.g);
+    if (!enSpan) continue;
+    var good = p.zh[0];
+    if (zhMatch(p.g, zhText, p)) continue;             /* agreement */
+    var wrong = wrongZhFor(p.g, zhText, p);
+    issues.push({
+      group:p.g, severity: wrong ? "material" : "missing",
+      en:enSpan, zh: wrong || "(未找到對應詞語)",
+      good:good, tip:p.tip
+    });
+  }
+
+  /* Number parity. */
+  for (i = 0; i < NUMBER_CHECKS.length; i++){
+    var check = NUMBER_CHECKS[i];
+    var mEn = enText.match(check.en);
+    var mZh = zhText.match(check.zhNum);
+    if (!mEn || !mZh) continue;
+    var nEn = mEn[1] || mEn[2] || mEn[3];
+    var nZh = mZh[1] || mZh[2];
+    if (nEn !== nZh){
+      issues.push({
+        group:check.id, severity:"material",
+        en:String(nEn), zh:String(nZh), good:String(nEn),
+        tip:"兩邊的數字必須一致。"
+      });
+    }
+  }
+
+  /* Superseding map layer: the slot is which layer governs maintenance, so
+     only the maintenance clause is compared (the inspection clause always
+     refers to the new shaded area in both languages). */
+  var mapEn = enText.match(
+    /maintenance[^.]{0,60}?(the new shaded area|the original boundary|the boundary shown on the (?:2019 map|superseded plan))/i);
+  var mapZh = zhText.match(/維修[^。]{0,50}?(新的陰影範圍|原來的界線|2019年圖則|已取代圖則)/);
+  if (mapEn && mapZh){
+    var mapClass = function(s){
+      if (s.indexOf("new shaded") !== -1) return "new";
+      if (s.indexOf("original") !== -1) return "orig";
+      if (s.indexOf("2019") !== -1) return "y2019";
+      return "sup";
+    };
+    var zhClass = function(s){
+      if (s.indexOf("新的陰影範圍") !== -1) return "new";
+      if (s.indexOf("原來的界線") !== -1) return "orig";
+      if (s.indexOf("2019") !== -1) return "y2019";
+      return "sup";
+    };
+    if (mapClass(mapEn[1]) !== zhClass(mapZh[1])){
+      var good = {new:"新的陰影範圍", orig:"原來的界線",
+                  y2019:"2019年圖則所示的界線", sup:"已取代圖則所示的界線"};
+      issues.push({
+        group:"Superseding map layer", severity:"material",
+        en:mapEn[1], zh:mapZh[1], good:good[mapClass(mapEn[1])],
+        tip:"維修以哪一層圖則為準"
+      });
+    }
+  }
+
+  /* Grandfathered classification: the deciding clause is the one about
+     clerical corrections, not the (constant) new-designation clause. */
+  var gEn = enText.match(
+    /clerical correction[^.]{0,60}?(the former code|the revised code|the interim code|the code in force when the designation was first recorded)/i);
+  var gZh = zhText.match(/文書更正[^。]{0,50}?(原有代碼|新代碼|過渡代碼|首次登記時生效的代碼)/);
+  if (gEn && gZh){
+    var gCls = function(s){
+      if (s.indexOf("former") !== -1 || s.indexOf("in force") !== -1) return "old";
+      if (s.indexOf("interim") !== -1) return "interim";
+      return "new";
+    };
+    var gZhCls = function(s){
+      if (s.indexOf("原有") !== -1 || s.indexOf("首次") !== -1) return "old";
+      if (s.indexOf("過渡") !== -1) return "interim";
+      return "new";
+    };
+    if (gCls(gEn[1]) !== gZhCls(gZh[1])){
+      var gGood = {old:"原有代碼", interim:"過渡代碼", "new":"新代碼"};
+      issues.push({
+        group:"Grandfathered classification", severity:"material",
+        en:gEn[1], zh:gZh[1], good:gGood[gCls(gEn[1])],
+        tip:"文書更正後沿用哪個代碼"
+      });
+    }
+  }
+
+  /* Reporting denominator: a Chinese "before the closing date" qualifier with
+     no English counterpart is itself a divergence. */
+  if (/截止日期前收到/.test(zhText)
+      && !/before the closing date/i.test(enText)
+      && /(?:all|every) submissions?/i.test(enText)){
+    issues.push({
+      group:"Reporting denominator", severity:"material",
+      en:"all submissions", zh:"截止日期前收到的所有提交個案",
+      good:"所有提交個案", tip:"分母範圍"
+    });
+  }
+
+  /* De-duplicate identical findings. */
+  var seen = {};
+  issues = issues.filter(function(issue){
+    var key = issue.group + "|" + issue.en + "|" + issue.zh;
+    if (seen[key]) return false;
+    seen[key] = true;
+    return true;
+  });
+
+  return {verdict: issues.length === 0 ? "clear" : "issues", issues: issues};
+}
+  return typeof audit === "function" ? { audit: audit, version: PARAMS_VERSION } : null;
+})();
+
 const $ = (id) => document.getElementById(id);
 const STORE = "v11_bridge_url";
 const CANDIDATES = ["", "http://127.0.0.1:8765", "http://localhost:8765"];
-const STATE = { base: null };
-
+const STATE = { base: null, mode: "quick" };
 const SAMPLES = {
   pass: ["Please submit the form on Friday.", "請於星期五提交表格。"],
   fail: ["Record the height in metres above the datum shown on the plan.", "請以厘米記錄高於圖則所示基準面的高度。"]
 };
-
 const setPill = (text, cls) => { const p = $("pill"); p.textContent = text; p.className = "pill " + cls; };
 const counts = () => { $("enCount").textContent = $("english").value.length; $("zhCount").textContent = $("chinese").value.length; };
 const escapeHtml = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
+function setMode(mode) {
+  STATE.mode = mode;
+  document.querySelectorAll(".mode-btn").forEach((b) => b.classList.toggle("active", b.dataset.mode === mode));
+  if (mode === "quick") {
+    setPill("in-browser rules", "ready");
+    $("hint").textContent = "Rules run here in the page: terminology, units, numbers and reference numbers. No models, no upload.";
+  } else {
+    $("hint").textContent = STATE.base
+      ? "Frozen V11 is connected at " + STATE.base + "."
+      : "Frozen V11 needs the local checker: python v11.py --serve 8765";
+    setPill(STATE.base ? "checker connected" : "no local checker", STATE.base ? "ready" : "error");
+  }
+}
+
 async function probe(base) {
-  const target = (base || "") + "/health";
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 2500);
   try {
-    const response = await fetch(target, { signal: controller.signal, cache: "no-store" });
+    const response = await fetch((base || "") + "/health", { signal: controller.signal, cache: "no-store" });
     if (!response.ok) return false;
     const data = await response.json();
     return data && data.ok ? (base || location.origin) : false;
@@ -141,7 +528,7 @@ async function probe(base) {
   }
 }
 
-async function detect(report = true) {
+async function detect() {
   const saved = localStorage.getItem(STORE);
   const order = [...new Set([saved, ...CANDIDATES].filter((x) => x !== null))];
   for (const base of order) {
@@ -152,33 +539,82 @@ async function detect(report = true) {
       $("bridgeUrl").value = found;
       $("bridgeState").textContent = "connected";
       $("banner").hidden = true;
-      setPill("checker connected", "ready");
+      if (STATE.mode === "v11") setMode("v11");
       return true;
     }
   }
   STATE.base = null;
   $("bridgeState").textContent = "not running";
-  $("banner").hidden = false;
-  if (report) setPill("no local checker", "error");
+  $("banner").hidden = true;
+  if (STATE.mode === "v11") setMode("quick");
   return false;
 }
 
+function renderQuick(result) {
+  const flagged = result.verdict === "issues";
+  $("result").style.display = "flex";
+  $("verdict").className = "verdict " + (flagged ? "bad" : "ok");
+  $("verdict").textContent = flagged ? "⚠️ Issues found · 發現 " + result.issues.length + " 項" : "✅ No discrepancy found";
+  $("fill").style.width = flagged ? "100%" : "3%";
+  $("score").textContent = "n/a (rules)";
+  $("threshold").textContent = "n/a";
+  $("path").textContent = "in_browser_rules";
+  $("coverage").textContent = "quick";
+  $("warnings").innerHTML = flagged
+    ? result.issues.map((issue) =>
+        "<div class='issue'><b>" + escapeHtml(issue.group) + "</b> · " + escapeHtml(issue.severity) +
+        "<div class='pair'>English: <code>" + escapeHtml(issue.en) + "</code> → Chinese: <code>" + escapeHtml(issue.zh) + "</code></div>" +
+        "<div class='pair'>Suggested: " + escapeHtml(issue.good || "") + "</div></div>").join("")
+    : "<div class='why'>Terminology, units, numbers and reference numbers agree. Tone and layout still deserve a human read.</div>";
+  setPill("in-browser rules", "ready");
+}
+
+function renderV11(data) {
+  const record = data.records[0];
+  const flagged = String(record.status).indexOf("Check") >= 0;
+  const score = Number(record.error_score || 0), threshold = Number(record.decision_threshold || 0.785);
+  $("result").style.display = "flex";
+  $("verdict").className = "verdict " + (flagged ? "bad" : "ok");
+  $("verdict").textContent = record.status;
+  $("fill").style.width = Math.max(2, Math.min(100, score * 100)) + "%";
+  $("score").textContent = score.toFixed(4);
+  $("threshold").textContent = threshold.toFixed(3);
+  $("path").textContent = record.decision_path || "-";
+  $("coverage").textContent = record.coverage || "-";
+  const findings = data.records.filter((r) => r.why);
+  $("warnings").innerHTML = findings.length
+    ? "<ul class='warn'>" + findings.map((r) => "<li><b>" + escapeHtml(r.category || r.kind || "finding") + "</b><div class='why'>" + escapeHtml(r.why) + "</div></li>").join("") + "</ul>"
+    : "<div class='why'>No discrepancy found in the checked facts, terminology, numbers or units.</div>";
+  setPill("checker connected", "ready");
+}
+
+function renderError(message) {
+  $("result").style.display = "flex";
+  $("verdict").className = "verdict err";
+  $("verdict").textContent = "Could not run the checker";
+  $("warnings").innerHTML = "<div class='why'>" + escapeHtml(message) + "</div>";
+  setPill("error", "error");
+}
+
+document.querySelectorAll(".mode-btn").forEach((b) => b.addEventListener("click", () => {
+  setMode(b.dataset.mode);
+  $("result").style.display = "none";
+}));
 $("copyCmd").addEventListener("click", async () => {
   try { await navigator.clipboard.writeText($("cmd").textContent); $("copyCmd").textContent = "copied"; }
   catch (error) { $("copyCmd").textContent = "select and copy"; }
 });
-$("retry").addEventListener("click", () => { setPill("detecting…", "loading"); detect(); });
+$("retry").addEventListener("click", async () => { setPill("detecting…", "loading"); await detect(); setMode(STATE.base ? "v11" : "quick"); });
 $("saveBridge").addEventListener("click", async () => {
   const value = $("bridgeUrl").value.trim().replace(/\/$/, "");
   if (!value) { localStorage.removeItem(STORE); return detect(); }
-  const found = await probe(value);
-  if (found) {
+  if (await probe(value)) {
     localStorage.setItem(STORE, value);
     STATE.base = value;
     $("bridgeState").textContent = "connected";
     $("banner").hidden = true;
     $("bridgeLabel").textContent = value;
-    setPill("checker connected", "ready");
+    setMode("v11");
   } else {
     $("bridgeState").textContent = "unreachable";
     setPill("cannot reach that address", "error");
@@ -197,10 +633,16 @@ $("clear").addEventListener("click", () => {
 $("run").addEventListener("click", async () => {
   const english = $("english").value.trim(), chinese = $("chinese").value.trim();
   if (!english || !chinese) { $("hint").textContent = "Both languages are required."; return; }
-  if (!STATE.base && !(await detect(false))) {
-    $("hint").textContent = "Start the checker first: python v11.py --serve 8765";
-    $("banner").hidden = false;
-    setPill("no local checker", "error");
+  if (STATE.mode === "quick") {
+    if (!RULES) return renderError("The in-browser rules did not load; use the frozen checker instead.");
+    try { renderQuick(RULES.audit(english, chinese)); }
+    catch (error) { renderError(error.message || String(error)); }
+    return;
+  }
+  if (!STATE.base && !(await detect())) {
+    setMode("quick");
+    $("hint").textContent = "No local checker found. Switched to in-browser rules; start it with: python v11.py --serve 8765";
+    try { renderQuick(RULES.audit(english, chinese)); } catch (error) { renderError(error.message || String(error)); }
     return;
   }
   $("run").disabled = true;
@@ -214,36 +656,18 @@ $("run").addEventListener("click", async () => {
     });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || ("HTTP " + response.status));
-    const record = data.records[0];
-    const flagged = String(record.status).indexOf("Check") >= 0;
-    const score = Number(record.error_score || 0), threshold = Number(record.decision_threshold || 0.785);
-    $("result").style.display = "flex";
-    $("verdict").className = "verdict " + (flagged ? "bad" : "ok");
-    $("verdict").textContent = record.status;
-    $("fill").style.width = Math.max(2, Math.min(100, score * 100)) + "%";
-    $("score").textContent = score.toFixed(4);
-    $("threshold").textContent = threshold.toFixed(3);
-    $("path").textContent = record.decision_path || "-";
-    $("coverage").textContent = record.coverage || "-";
-    const findings = data.records.filter((r) => r.why);
-    $("warnings").innerHTML = findings.length
-      ? "<ul class='warn'>" + findings.map((r) => "<li><b>" + escapeHtml(r.category || r.kind || "finding") + "</b><div class='why'>" + escapeHtml(r.why) + "</div></li>").join("") + "</ul>"
-      : "<div class='why'>No discrepancy found in the checked facts, terminology, numbers or units.</div>";
-    setPill("checker connected", "ready");
+    renderV11(data);
     $("hint").textContent = "Checked locally with the frozen models. Nothing left this machine.";
   } catch (error) {
-    $("result").style.display = "flex";
-    $("verdict").className = "verdict err";
-    $("verdict").textContent = "Could not run the checker";
-    $("warnings").innerHTML = "<div class='why'>" + escapeHtml(error.message || String(error)) + "</div>";
-    setPill("error", "error");
+    renderError(error.message || String(error));
   } finally {
     $("run").disabled = false;
   }
 });
 
 counts();
-detect();
+if (!RULES) setPill("rules missing", "error");
+detect().then(() => setMode(STATE.base ? "v11" : "quick"));
 </script>
 </body>
 </html>
