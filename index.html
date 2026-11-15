@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Notice check · V11 bilingual checker</title>
+<meta name="description" content="Check an English notice against its Chinese translation with the frozen V11 checker, running locally.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✓</text></svg>">
+<style>
+  :root { color-scheme: dark; --bg:#0f1115; --panel:#171a21; --line:#2a2f3a; --ink:#e7e9ee; --dim:#9aa3b2; --accent:#5b9dff; --ok:#3fb950; --warn:#d29922; --bad:#f85149; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans TC",sans-serif; }
+  header { display:flex; align-items:center; gap:14px; padding:16px 24px; border-bottom:1px solid var(--line); position:sticky; top:0; background:var(--bg); z-index:2; flex-wrap:wrap; }
+  h1 { font-size:17px; margin:0; font-weight:650; }
+  .pill { font-size:12px; padding:3px 9px; border-radius:999px; border:1px solid var(--line); color:var(--dim); white-space:nowrap; }
+  .pill.ready { color:var(--ok); } .pill.loading { color:var(--warn); } .pill.error { color:var(--bad); }
+  main { max-width:1120px; margin:0 auto; padding:24px; display:grid; gap:18px; }
+  .grid { display:grid; gap:18px; grid-template-columns:1fr 1fr; }
+  @media (max-width:860px) { .grid { grid-template-columns:1fr; } }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px; display:flex; flex-direction:column; gap:8px; }
+  .card > label { font-size:12px; text-transform:uppercase; letter-spacing:.7px; color:var(--dim); display:flex; justify-content:space-between; }
+  textarea, input[type=text] { width:100%; background:#0c0e13; color:var(--ink); border:1px solid var(--line); border-radius:9px; padding:11px; font:inherit; }
+  textarea { min-height:180px; resize:vertical; }
+  textarea:focus, input[type=text]:focus { outline:2px solid #2f5f9e; outline-offset:1px; }
+  .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  button { font:inherit; font-weight:600; padding:9px 16px; border-radius:9px; border:1px solid var(--line); background:#222835; color:var(--ink); cursor:pointer; }
+  button.primary { background:var(--accent); border-color:transparent; color:#06101f; }
+  button:disabled { opacity:.5; cursor:progress; }
+  button.ghost { background:transparent; color:var(--dim); font-weight:500; padding:5px 10px; }
+  .hint { color:var(--dim); font-size:13px; }
+  #result { display:none; }
+  .verdict { font-size:19px; font-weight:650; }
+  .verdict.ok { color:var(--ok); } .verdict.bad { color:var(--warn); } .verdict.err { color:var(--bad); }
+  .meta { display:grid; grid-template-columns:auto 1fr; gap:4px 14px; font-size:13.5px; color:var(--dim); }
+  .meta b { color:var(--ink); font-weight:600; }
+  .bar { height:9px; border-radius:999px; background:#0c0e13; border:1px solid var(--line); position:relative; overflow:hidden; }
+  .bar > i { position:absolute; inset:0 auto 0 0; width:0; background:linear-gradient(90deg,var(--ok),var(--warn)); transition:width .5s ease; }
+  .bar > u { position:absolute; top:-4px; bottom:-4px; width:2px; background:var(--dim); left:78.5%; }
+  ul.warn { margin:0; padding-left:18px; } ul.warn li { margin:4px 0; }
+  .why { font-size:13.5px; color:var(--dim); }
+  pre { background:#0c0e13; border:1px solid var(--line); border-radius:9px; padding:11px; overflow-x:auto; font-size:13px; margin:0; }
+  #banner { border-color:#6b4e12; background:#1d1a10; }
+  #banner h2 { margin:0; font-size:15px; }
+  footer { color:var(--dim); font-size:12.5px; text-align:center; padding:8px 24px 28px; }
+  a { color:var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Notice check · 公告譯文核查</h1>
+  <span id="pill" class="pill loading">detecting local checker…</span>
+  <span class="hint" id="bridgeLabel"></span>
+</header>
+<main>
+  <div class="card" id="banner" hidden>
+    <h2>No checker running on this machine yet</h2>
+    <div class="why">
+      This page is static: the models (5.4&nbsp;GB) cannot run on a web host, so the checker runs from
+      <code>v11.py</code> on your computer and this page talks to it over <code>127.0.0.1</code>.
+    </div>
+    <pre id="cmd">python v11.py --serve 8765</pre>
+    <div class="row">
+      <button class="ghost" id="copyCmd">copy command</button>
+      <button class="ghost" id="retry">retry detection</button>
+      <span class="hint">Download <a href="./v11.py" download>v11.py</a> → run the command → reload this page.</span>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <label>English <span id="enCount">0</span></label>
+      <textarea id="english" placeholder="Please submit the form on Friday."></textarea>
+      <div class="row">
+        <button class="ghost" data-sample="pass">sample · clean</button>
+        <button class="ghost" data-sample="fail">sample · issue</button>
+      </div>
+    </div>
+    <div class="card">
+      <label>Chinese · 中文 <span id="zhCount">0</span></label>
+      <textarea id="chinese" placeholder="請於星期五提交表格。"></textarea>
+    </div>
+  </div>
+
+  <div class="row">
+    <button id="run" class="primary">Check · 檢查</button>
+    <button id="clear" class="ghost">clear</button>
+    <span class="hint" id="hint">First check loads three frozen models (~4 min); later checks take seconds.</span>
+  </div>
+
+  <div id="result" class="card">
+    <div id="verdict" class="verdict"></div>
+    <div class="bar"><i id="fill"></i><u></u></div>
+    <div class="meta">
+      <span>score</span><b id="score">-</b>
+      <span>threshold</span><b id="threshold">-</b>
+      <span>decision path</span><b id="path">-</b>
+      <span>coverage</span><b id="coverage">-</b>
+    </div>
+    <div id="warnings"></div>
+  </div>
+
+  <div class="card">
+    <label for="bridgeUrl">Checker address <span id="bridgeState">not set</span></label>
+    <div class="row">
+      <input id="bridgeUrl" type="text" spellcheck="false" placeholder="http://127.0.0.1:8765">
+      <button class="ghost" id="saveBridge">save &amp; test</button>
+    </div>
+    <div class="hint">Default is <code>http://127.0.0.1:8765</code>. Nothing you type here leaves your browser.</div>
+  </div>
+</main>
+<footer>Pairs are sent only to the address above, on your own machine. The frozen checker is hash-pinned; no wording is stored.</footer>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const STORE = "v11_bridge_url";
+const CANDIDATES = ["", "http://127.0.0.1:8765", "http://localhost:8765"];
+const STATE = { base: null };
+
+const SAMPLES = {
+  pass: ["Please submit the form on Friday.", "請於星期五提交表格。"],
+  fail: ["Record the height in metres above the datum shown on the plan.", "請以厘米記錄高於圖則所示基準面的高度。"]
+};
+
+const setPill = (text, cls) => { const p = $("pill"); p.textContent = text; p.className = "pill " + cls; };
+const counts = () => { $("enCount").textContent = $("english").value.length; $("zhCount").textContent = $("chinese").value.length; };
+const escapeHtml = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+async function probe(base) {
+  const target = (base || "") + "/health";
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 2500);
+  try {
+    const response = await fetch(target, { signal: controller.signal, cache: "no-store" });
+    if (!response.ok) return false;
+    const data = await response.json();
+    return data && data.ok ? (base || location.origin) : false;
+  } catch (error) {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function detect(report = true) {
+  const saved = localStorage.getItem(STORE);
+  const order = [...new Set([saved, ...CANDIDATES].filter((x) => x !== null))];
+  for (const base of order) {
+    const found = await probe(base);
+    if (found) {
+      STATE.base = found;
+      $("bridgeLabel").textContent = found;
+      $("bridgeUrl").value = found;
+      $("bridgeState").textContent = "connected";
+      $("banner").hidden = true;
+      setPill("checker connected", "ready");
+      return true;
+    }
+  }
+  STATE.base = null;
+  $("bridgeState").textContent = "not running";
+  $("banner").hidden = false;
+  if (report) setPill("no local checker", "error");
+  return false;
+}
+
+$("copyCmd").addEventListener("click", async () => {
+  try { await navigator.clipboard.writeText($("cmd").textContent); $("copyCmd").textContent = "copied"; }
+  catch (error) { $("copyCmd").textContent = "select and copy"; }
+});
+$("retry").addEventListener("click", () => { setPill("detecting…", "loading"); detect(); });
+$("saveBridge").addEventListener("click", async () => {
+  const value = $("bridgeUrl").value.trim().replace(/\/$/, "");
+  if (!value) { localStorage.removeItem(STORE); return detect(); }
+  const found = await probe(value);
+  if (found) {
+    localStorage.setItem(STORE, value);
+    STATE.base = value;
+    $("bridgeState").textContent = "connected";
+    $("banner").hidden = true;
+    $("bridgeLabel").textContent = value;
+    setPill("checker connected", "ready");
+  } else {
+    $("bridgeState").textContent = "unreachable";
+    setPill("cannot reach that address", "error");
+  }
+});
+
+["english", "chinese"].forEach((id) => $(id).addEventListener("input", counts));
+document.querySelectorAll("[data-sample]").forEach((b) => b.addEventListener("click", () => {
+  const pair = SAMPLES[b.dataset.sample];
+  $("english").value = pair[0]; $("chinese").value = pair[1]; counts(); $("result").style.display = "none";
+}));
+$("clear").addEventListener("click", () => {
+  $("english").value = ""; $("chinese").value = ""; counts(); $("result").style.display = "none";
+});
+
+$("run").addEventListener("click", async () => {
+  const english = $("english").value.trim(), chinese = $("chinese").value.trim();
+  if (!english || !chinese) { $("hint").textContent = "Both languages are required."; return; }
+  if (!STATE.base && !(await detect(false))) {
+    $("hint").textContent = "Start the checker first: python v11.py --serve 8765";
+    $("banner").hidden = false;
+    setPill("no local checker", "error");
+    return;
+  }
+  $("run").disabled = true;
+  setPill("checking…", "loading");
+  $("hint").textContent = "Working. The first check can take ~4 minutes while the models load.";
+  try {
+    const response = await fetch(STATE.base + "/v11/check", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ english, chinese })
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || ("HTTP " + response.status));
+    const record = data.records[0];
+    const flagged = String(record.status).indexOf("Check") >= 0;
+    const score = Number(record.error_score || 0), threshold = Number(record.decision_threshold || 0.785);
+    $("result").style.display = "flex";
+    $("verdict").className = "verdict " + (flagged ? "bad" : "ok");
+    $("verdict").textContent = record.status;
+    $("fill").style.width = Math.max(2, Math.min(100, score * 100)) + "%";
+    $("score").textContent = score.toFixed(4);
+    $("threshold").textContent = threshold.toFixed(3);
+    $("path").textContent = record.decision_path || "-";
+    $("coverage").textContent = record.coverage || "-";
+    const findings = data.records.filter((r) => r.why);
+    $("warnings").innerHTML = findings.length
+      ? "<ul class='warn'>" + findings.map((r) => "<li><b>" + escapeHtml(r.category || r.kind || "finding") + "</b><div class='why'>" + escapeHtml(r.why) + "</div></li>").join("") + "</ul>"
+      : "<div class='why'>No discrepancy found in the checked facts, terminology, numbers or units.</div>";
+    setPill("checker connected", "ready");
+    $("hint").textContent = "Checked locally with the frozen models. Nothing left this machine.";
+  } catch (error) {
+    $("result").style.display = "flex";
+    $("verdict").className = "verdict err";
+    $("verdict").textContent = "Could not run the checker";
+    $("warnings").innerHTML = "<div class='why'>" + escapeHtml(error.message || String(error)) + "</div>";
+    setPill("error", "error");
+  } finally {
+    $("run").disabled = false;
+  }
+});
+
+counts();
+detect();
+</script>
+</body>
+</html>
